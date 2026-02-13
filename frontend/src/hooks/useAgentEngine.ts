@@ -13,6 +13,8 @@ import { DATA_SOURCES, getDataSourceById } from "@/config/dataSources";
 import { fetchAllPrices, PriceResult } from "@/utils/priceOracle";
 import { autoExecutePosition } from "@/utils/agentWallet";
 import { encryptDirection } from "@/utils/encryption";
+import { loadAgentMemory, addAgentMemory, type AgentMemoryEntry } from "@/utils/agentMemory";
+import type { LLMDecision } from "@/app/api/agent-decision/route";
 import {
   AgentProfile,
   AgentRecommendation,
@@ -351,6 +353,105 @@ export function useMultiAgent(address: string | undefined) {
     []
   );
 
+  // ─── LLM Decision Call ──────────────────────────────────────────
+
+  const callLLMDecision = useCallback(
+    async (
+      agentId: number,
+      profile: AgentProfile,
+      balanceNum: number,
+      marketsData: Array<{
+        marketId: number;
+        source: ReturnType<typeof getDataSourceById>;
+        priceResult: PriceResult;
+        market: any;
+        signals: SignalBreakdown;
+        hasExistingPosition: boolean;
+      }>,
+    ): Promise<LLMDecision | null> => {
+      try {
+        const memory = await loadAgentMemory(agentId);
+
+        const marketsContext = marketsData
+          .filter((m) => m.source)
+          .map((m) => {
+            const targetPrice = Number(m.market.targetPrice) / 1e6;
+            const yPool = Number(formatUnits(m.market.yesPool, USDC_DECIMALS));
+            const nPool = Number(formatUnits(m.market.noPool, USDC_DECIMALS));
+            return {
+              marketId: m.marketId,
+              symbol: m.source!.symbol,
+              name: m.source!.name,
+              category: m.source!.category,
+              currentPrice: m.priceResult.price,
+              targetPrice,
+              conditionAbove: m.market.conditionAbove,
+              yesPool: yPool,
+              noPool: nPool,
+              resolutionTime: Number(m.market.resolutionTime),
+              priceDistance: m.signals.priceDistance,
+              momentum: m.signals.momentum,
+              timeUrgency: m.signals.timeUrgency,
+              poolImbalance: m.signals.poolImbalance,
+              hasExistingPosition: m.hasExistingPosition,
+            };
+          });
+
+        if (marketsContext.length === 0) return null;
+
+        const agentContext = {
+          agentId,
+          name: profile.name,
+          personality: profile.personality,
+          systemPrompt: profile.systemPrompt || "",
+          balance: balanceNum,
+          maxBetPerMarket: Number(formatUnits(profile.maxBetPerMarket, USDC_DECIMALS)),
+          maxTotalExposure: Number(formatUnits(profile.maxTotalExposure, USDC_DECIMALS)),
+          currentExposure: Number(formatUnits(profile.currentExposure, USDC_DECIMALS)),
+          confidenceThreshold: profile.confidenceThreshold,
+          autoExecute: profile.autoExecute,
+          allowedAssetTypes: profile.allowedAssetTypes,
+        };
+
+        const memoryForLLM = memory.map((m) => ({
+          timestamp: m.timestamp,
+          marketId: m.marketId,
+          symbol: m.symbol,
+          action: m.action,
+          stake: m.stake,
+          reasoning: m.reasoning,
+          confidence: m.confidence,
+        }));
+
+        addLog(agentId, profile.name, `Consulting LLM for decision across ${marketsContext.length} markets...`, "scan");
+
+        const res = await fetch("/api/agent-decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agent: agentContext,
+            markets: marketsContext,
+            memory: memoryForLLM,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (data.useFallback) {
+          addLog(agentId, profile.name, "LLM unavailable, using rule-based fallback.", "info");
+          return null;
+        }
+
+        return data as LLMDecision;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        addLog(agentId, profile.name, `LLM call failed: ${errMsg}. Falling back to rules.`, "warning");
+        return null;
+      }
+    },
+    [addLog]
+  );
+
   // ─── Scan for a specific agent ─────────────────────────────────
 
   const scanForAgent = useCallback(
@@ -359,18 +460,12 @@ export function useMultiAgent(address: string | undefined) {
       if (!profile || !profile.isActive) return;
 
       // For manual agents, pause scanning if there's already a pending recommendation
-      // waiting for user approval. Resume once they approve or reject it.
       if (!profile.autoExecute) {
         const hasPending = recommendationsRef.current.some(
           (r) => r.agentId === agentId && r.status === "pending"
         );
         if (hasPending) {
-          addLog(
-            agentId,
-            profile.name,
-            "Waiting for pending recommendation to be approved or rejected before scanning.",
-            "info"
-          );
+          addLog(agentId, profile.name, "Waiting for pending recommendation to be approved or rejected before scanning.", "info");
           return;
         }
       }
@@ -389,37 +484,21 @@ export function useMultiAgent(address: string | undefined) {
         const freshBalance = freshAgent.balance as bigint;
         const balanceNum = Number(formatUnits(freshBalance, USDC_DECIMALS));
 
-        // Only stop the agent for empty vault if it's in auto-execute mode.
-        // Manual agents don't use the vault — the user signs and pays from their own wallet.
+        // Stop auto-execute agents with empty vault
         if (profile.autoExecute && freshBalance === BigInt(0)) {
-          addLog(
-            agentId,
-            profile.name,
-            `Vault balance is 0 USDC. Stopping agent. Fund the agent vault to resume.`,
-            "warning"
-          );
+          addLog(agentId, profile.name, `Vault balance is 0 USDC. Stopping agent. Fund the agent vault to resume.`, "warning");
           addAudit(agentId, "stopped", "Agent stopped: vault empty. Fund to resume.");
-          // Auto-stop this agent
           const interval = intervalsRef.current.get(agentId);
-          if (interval) {
-            clearInterval(interval);
-            intervalsRef.current.delete(agentId);
-          }
-          setRunningAgents((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(agentId);
-            return newSet;
-          });
+          if (interval) { clearInterval(interval); intervalsRef.current.delete(agentId); }
+          setRunningAgents((prev) => { const s = new Set(prev); s.delete(agentId); return s; });
           return;
         }
 
         addLog(agentId, profile.name, `Scanning markets [${personality}] | Vault: ${balanceNum} USDC...`, "scan");
 
-        // 1. Read actual market count from chain (fresh, not cached)
+        // 1. Read market count
         const count = await publicClient.readContract({
-          address: BELIEF_MARKET_ADDRESS,
-          abi: BELIEF_MARKET_ABI,
-          functionName: "getMarketCount",
+          address: BELIEF_MARKET_ADDRESS, abi: BELIEF_MARKET_ABI, functionName: "getMarketCount",
         });
         const marketTotal = Number(count);
 
@@ -433,7 +512,6 @@ export function useMultiAgent(address: string | undefined) {
         const prices = await fetchAllPrices();
         setPrices(prices);
 
-        // Update price history
         for (const p of prices) {
           if (!p.success) continue;
           const hist = priceHistoryRef.current[p.sourceId] || [];
@@ -442,287 +520,315 @@ export function useMultiAgent(address: string | undefined) {
           priceHistoryRef.current[p.sourceId] = hist;
         }
 
-        // 3. Read agent's existing positions to avoid duplicates
-        let agentPositionMarkets: Set<number> = new Set();
+        // 3. Read agent's existing positions
+        const agentPositionMarkets: Set<number> = new Set();
         try {
           const posIds = await publicClient.readContract({
-            address: BELIEF_MARKET_ADDRESS,
-            abi: BELIEF_MARKET_ABI,
-            functionName: "getAgentPositionIds",
-            args: [BigInt(agentId)],
+            address: BELIEF_MARKET_ADDRESS, abi: BELIEF_MARKET_ABI,
+            functionName: "getAgentPositionIds", args: [BigInt(agentId)],
           }) as bigint[];
 
           for (const posId of posIds) {
             const pos = await publicClient.readContract({
-              address: BELIEF_MARKET_ADDRESS,
-              abi: BELIEF_MARKET_ABI,
-              functionName: "getPosition",
-              args: [posId],
+              address: BELIEF_MARKET_ADDRESS, abi: BELIEF_MARKET_ABI,
+              functionName: "getPosition", args: [posId],
             }) as any;
-            // Only track active positions (status 0 = ACTIVE)
-            if (Number(pos.status) === 0) {
-              agentPositionMarkets.add(Number(pos.marketId));
-            }
+            if (Number(pos.status) === 0) agentPositionMarkets.add(Number(pos.marketId));
           }
 
           if (agentPositionMarkets.size > 0) {
             addLog(agentId, profile.name, `Agent has active positions in ${agentPositionMarkets.size} market(s): [${[...agentPositionMarkets].join(", ")}]`, "info");
           }
-        } catch {
-          // If read fails, continue without position tracking
-        }
+        } catch { /* continue */ }
 
-        // 4. For each market, read on-chain data and analyze
-        const newRecs: AgentRecommendation[] = [];
+        // 4. Gather all eligible market data
+        const marketsData: Array<{
+          marketId: number;
+          source: ReturnType<typeof getDataSourceById>;
+          priceResult: PriceResult;
+          market: any;
+          signals: SignalBreakdown;
+          hasExistingPosition: boolean;
+        }> = [];
 
-        for (let i = 0; i < marketTotal && newRecs.length < 10; i++) {
+        for (let i = 0; i < marketTotal; i++) {
           try {
-            // Skip markets where agent already has an active position
-            if (agentPositionMarkets.has(i)) {
-              addLog(agentId, profile.name, `Market #${i}: already has active position, skipping.`, "info");
-              continue;
-            }
-
-            // Read the actual market from contract
             const market = await publicClient.readContract({
-              address: BELIEF_MARKET_ADDRESS,
-              abi: BELIEF_MARKET_ABI,
-              functionName: "getMarket",
-              args: [BigInt(i)],
+              address: BELIEF_MARKET_ADDRESS, abi: BELIEF_MARKET_ABI,
+              functionName: "getMarket", args: [BigInt(i)],
             }) as any;
 
-            // Skip non-open markets
             if (Number(market.status) !== 0) continue;
-
-            // Skip expired markets
             const resolutionTime = Number(market.resolutionTime);
             if (resolutionTime <= Date.now() / 1000) continue;
 
             const dataSourceId = Number(market.dataSourceId);
             const source = getDataSourceById(dataSourceId);
-            if (!source) {
-              addLog(agentId, profile.name, `Market #${i}: unknown data source ${dataSourceId}, skipping.`, "warning");
-              continue;
-            }
-
-            // Check agent's allowed asset types
+            if (!source) continue;
             if ((source.assetType & profile.allowedAssetTypes) === 0) continue;
 
-            // Find live price for this market's data source
             const priceResult = prices.find((p) => p.success && p.sourceId === dataSourceId);
-            if (!priceResult || !priceResult.success) {
-              addLog(agentId, profile.name, `Market #${i} (${source.symbol}): no price data, skipping.`, "warning");
-              continue;
-            }
+            if (!priceResult || !priceResult.success) continue;
 
-            // Use actual on-chain market data
-            const targetPrice = Number(market.targetPrice) / 1e6; // PRICE_PRECISION = 1e6
-            const conditionAbove = market.conditionAbove;
-            const yesPool = market.yesPool;
-            const noPool = market.noPool;
-
-            const { signals, confidence, direction } = analyzeMarket(
-              personality,
-              priceResult.price,
-              targetPrice,
-              conditionAbove,
-              resolutionTime,
-              yesPool,
-              noPool,
-              source.id
+            const targetPrice = Number(market.targetPrice) / 1e6;
+            const { signals } = analyzeMarket(
+              personality, priceResult.price, targetPrice,
+              market.conditionAbove, resolutionTime,
+              market.yesPool, market.noPool, source.id
             );
 
-            const condLabel = conditionAbove ? "above" : "below";
+            const condLabel = market.conditionAbove ? "above" : "below";
             const distLabel = `${signals.priceDistance > 0 ? "+" : ""}${signals.priceDistance.toFixed(1)}%`;
-            addLog(
-              agentId,
-              profile.name,
-              `Market #${i} (${source.symbol}): $${priceResult.price.toFixed(2)} vs target $${targetPrice.toFixed(2)} (${condLabel}) | Dist: ${distLabel} | Mom: ${signals.momentum} | Urg: ${signals.timeUrgency}% | Conf: ${confidence}% [threshold: ${profile.confidenceThreshold}%]`,
+            addLog(agentId, profile.name,
+              `Market #${i} (${source.symbol}): $${priceResult.price.toFixed(2)} vs target $${targetPrice.toFixed(2)} (${condLabel}) | Dist: ${distLabel} | Mom: ${signals.momentum} | Urg: ${signals.timeUrgency}%`,
               "info"
             );
 
-            if (confidence >= profile.confidenceThreshold) {
-              const params = PERSONALITY_PARAMS[personality];
-              const maxBet = Number(formatUnits(profile.maxBetPerMarket, USDC_DECIMALS));
-              const suggestedStakeNum =
-                Math.round(maxBet * params.stakeMultiplier * 100) / 100;
-              const dirLabel = direction ? "YES" : "NO";
-
-              addLog(
-                agentId,
-                profile.name,
-                `Signal generated: ${dirLabel} on ${source.symbol} | Stake: ${suggestedStakeNum} USDC | Confidence: ${confidence}% | Mode: ${profile.autoExecute ? "auto-execute" : "manual"}`,
-                "recommendation"
-              );
-
-              // Auto-execute agents use submitPositionForAgent (vault) — cap to vault balance.
-              // Manual agents use submitPosition (user's wallet) — no vault cap needed.
-              let actualStake = suggestedStakeNum;
-              if (profile.autoExecute) {
-                actualStake = Math.min(suggestedStakeNum, balanceNum);
-                if (actualStake <= 0) {
-                  addLog(
-                    agentId,
-                    profile.name,
-                    `Signal ${dirLabel} on ${source.symbol} but vault is empty (${balanceNum} USDC). Fund the agent vault to enable execution.`,
-                    "warning"
-                  );
-                  continue;
-                }
-              }
-
-              const stakeRaw = BigInt(Math.round(actualStake * 10 ** USDC_DECIMALS));
-
-              const rec: AgentRecommendation = {
-                id: `${agentId}-${i}-${Date.now()}`,
-                agentId,
-                marketId: i,
-                direction,
-                confidence,
-                suggestedStake: stakeRaw,
-                reasoning: buildReasoning(source.symbol, signals, personality, direction),
-                currentPrice: priceResult.price,
-                targetPrice,
-                timestamp: Date.now(),
-                status: "pending",
-                signals,
-              };
-
-              addAudit(agentId, "recommendation", `${dirLabel} on ${source.symbol} (Market #${i}) — ${actualStake} USDC @ ${confidence}% confidence`, rec.reasoning, {
-                confidence,
-                stake: actualStake,
-                symbol: source.symbol,
-                marketId: i,
-                direction,
-                currentPrice: priceResult.price,
-                targetPrice,
-                priceDistance: signals.priceDistance,
-                momentum: signals.momentum,
-                timeUrgency: signals.timeUrgency,
-                poolImbalance: signals.poolImbalance,
-                mode: profile.autoExecute ? "auto" : "manual",
-              });
-
-              // Auto-execute: just do it, no recommendations
-              if (profile.autoExecute) {
-                addLog(agentId, profile.name, `Auto-executing: ${dirLabel} on Market #${i} (${source.symbol}) for ${actualStake} USDC via delegate wallet...`, "execution");
-                try {
-                  const encryptedDir = await encryptDirection(direction);
-                  const txHash = await autoExecutePosition(
-                    agentId,
-                    i,
-                    encryptedDir,
-                    stakeRaw
-                  );
-                  if (txHash) {
-                    rec.txHash = txHash;
-                    rec.status = "executed";
-                    addLog(
-                      agentId,
-                      profile.name,
-                      `Executed: ${dirLabel} on ${source.symbol} @ ${actualStake} USDC | tx: ${txHash.slice(0, 14)}...`,
-                      "execution"
-                    );
-                    addAudit(agentId, "executed", `${dirLabel} position on ${source.symbol} (Market #${i}) — ${actualStake} USDC`, undefined, {
-                      txHash,
-                      symbol: source.symbol,
-                      marketId: i,
-                      direction,
-                      stake: actualStake,
-                      confidence,
-                      mode: "auto",
-                    });
-                  } else {
-                    rec.status = "executed"; // Don't show as pending — log the failure
-                    addLog(
-                      agentId,
-                      profile.name,
-                      `Auto-execute returned null for ${source.symbol} Market #${i}. No delegate wallet found for agent #${agentId}. Create agent with auto-execute to generate a delegate key.`,
-                      "error"
-                    );
-                  }
-                } catch (err) {
-                  rec.status = "executed"; // Don't show as pending
-                  const errMsg = err instanceof Error ? err.message : String(err);
-                  addLog(
-                    agentId,
-                    profile.name,
-                    `Auto-execute failed for ${source.symbol} Market #${i}: ${errMsg}`,
-                    "error"
-                  );
-                  addAudit(agentId, "error", `Auto-execute failed on ${source.symbol} (Market #${i}): ${errMsg}`, undefined, {
-                    symbol: source.symbol,
-                    marketId: i,
-                    direction,
-                    stake: actualStake,
-                    confidence,
-                  });
-                }
-              }
-
-              newRecs.push(rec);
-            } else {
-              addLog(
-                agentId,
-                profile.name,
-                `Market #${i} (${source.symbol}): Confidence ${confidence}% below threshold ${profile.confidenceThreshold}%, skipping.`,
-                "info"
-              );
-            }
+            marketsData.push({
+              marketId: i, source, priceResult, market, signals,
+              hasExistingPosition: agentPositionMarkets.has(i),
+            });
           } catch (marketErr) {
             addLog(agentId, profile.name, `Error reading market #${i}: ${marketErr instanceof Error ? marketErr.message : "unknown"}`, "error");
           }
         }
 
+        if (marketsData.length === 0) {
+          addLog(agentId, profile.name, "No eligible markets found.", "info");
+          addAudit(agentId, "scan", `Scan complete: ${marketTotal} markets, 0 eligible`);
+          return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // 5. LLM Decision (with rule-based fallback)
+        // ═══════════════════════════════════════════════════════════════
+
+        let decision: LLMDecision | null = null;
+        let usedLLM = false;
+
+        // Try LLM first
+        decision = await callLLMDecision(agentId, profile, balanceNum, marketsData);
+        usedLLM = decision !== null && decision.source === "llm";
+
+        // Fallback to rule-based if LLM unavailable
+        if (!decision) {
+          addLog(agentId, profile.name, "Using rule-based analysis...", "info");
+
+          let bestRec: { marketId: number; direction: boolean; confidence: number; signals: SignalBreakdown; source: ReturnType<typeof getDataSourceById>; price: number; targetPrice: number } | null = null;
+
+          for (const md of marketsData) {
+            if (md.hasExistingPosition) continue;
+            const targetPrice = Number(md.market.targetPrice) / 1e6;
+            const { signals, confidence, direction } = analyzeMarket(
+              personality, md.priceResult.price, targetPrice,
+              md.market.conditionAbove, Number(md.market.resolutionTime),
+              md.market.yesPool, md.market.noPool, md.source!.id
+            );
+
+            if (confidence >= profile.confidenceThreshold) {
+              if (!bestRec || confidence > bestRec.confidence) {
+                bestRec = { marketId: md.marketId, direction, confidence, signals, source: md.source, price: md.priceResult.price, targetPrice };
+              }
+            }
+          }
+
+          if (bestRec) {
+            const params = PERSONALITY_PARAMS[personality];
+            const maxBet = Number(formatUnits(profile.maxBetPerMarket, USDC_DECIMALS));
+            const stakeNum = Math.round(maxBet * params.stakeMultiplier * 100) / 100;
+            decision = {
+              action: bestRec.direction ? "buy_yes" : "buy_no",
+              marketId: bestRec.marketId,
+              symbol: bestRec.source?.symbol || "",
+              stake: stakeNum,
+              confidence: bestRec.confidence,
+              reasoning: buildReasoning(bestRec.source?.symbol || "", bestRec.signals, personality, bestRec.direction),
+              marketAnalysis: `Rule-based: best signal from ${marketsData.length} markets. Price distance: ${bestRec.signals.priceDistance.toFixed(1)}%, momentum: ${bestRec.signals.momentum}, urgency: ${bestRec.signals.timeUrgency}%.`,
+              source: "fallback",
+            };
+          } else {
+            decision = {
+              action: "hold", marketId: null, symbol: "", stake: 0, confidence: 0,
+              reasoning: `No market met confidence threshold (${profile.confidenceThreshold}%) via rule-based analysis.`,
+              marketAnalysis: `Analyzed ${marketsData.length} markets. None exceeded threshold.`,
+              source: "fallback",
+            };
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // 6. Execute the decision
+        // ═══════════════════════════════════════════════════════════════
+
+        const sourceLabel = usedLLM ? "LLM" : "Rules";
+
+        if (decision.action === "hold" || !decision.marketId) {
+          addLog(agentId, profile.name,
+            `[${sourceLabel}] Decision: HOLD | ${decision.reasoning}`,
+            "recommendation"
+          );
+          addAudit(agentId, "recommendation", `[${sourceLabel}] HOLD — ${decision.reasoning}`, decision.marketAnalysis, {
+            source: decision.source,
+            confidence: decision.confidence,
+          });
+
+          // Save hold to memory
+          await addAgentMemory(agentId, {
+            timestamp: Date.now(),
+            marketId: -1,
+            symbol: "",
+            action: "hold",
+            stake: 0,
+            confidence: decision.confidence,
+            reasoning: decision.reasoning,
+            source: decision.source,
+          });
+        } else {
+          // We have an actionable decision
+          const direction = decision.action === "buy_yes";
+          const dirLabel = direction ? "YES" : "NO";
+          const md = marketsData.find((m) => m.marketId === decision!.marketId);
+
+          // Enforce stake limits
+          let actualStake = decision.stake;
+          if (profile.autoExecute) {
+            actualStake = Math.min(actualStake, balanceNum);
+            if (actualStake <= 0) {
+              addLog(agentId, profile.name,
+                `[${sourceLabel}] Wanted ${dirLabel} on ${decision.symbol} but vault empty.`,
+                "warning"
+              );
+              return;
+            }
+          }
+          actualStake = Math.min(actualStake, Number(formatUnits(profile.maxBetPerMarket, USDC_DECIMALS)));
+          const stakeRaw = BigInt(Math.round(actualStake * 10 ** USDC_DECIMALS));
+
+          addLog(agentId, profile.name,
+            `[${sourceLabel}] Signal: ${dirLabel} on ${decision.symbol} (Market #${decision.marketId}) | ${actualStake} USDC @ ${decision.confidence}% confidence`,
+            "recommendation"
+          );
+
+          if (usedLLM) {
+            addLog(agentId, profile.name, `LLM Reasoning: ${decision.reasoning}`, "info");
+            if (decision.marketAnalysis) {
+              addLog(agentId, profile.name, `Market Analysis: ${decision.marketAnalysis}`, "info");
+            }
+          }
+
+          const rec: AgentRecommendation = {
+            id: `${agentId}-${decision.marketId}-${Date.now()}`,
+            agentId,
+            marketId: decision.marketId,
+            direction,
+            confidence: decision.confidence,
+            suggestedStake: stakeRaw,
+            reasoning: decision.reasoning + (decision.marketAnalysis ? `\n\nMarket Analysis: ${decision.marketAnalysis}` : ""),
+            currentPrice: md?.priceResult.price || 0,
+            targetPrice: md ? Number(md.market.targetPrice) / 1e6 : 0,
+            timestamp: Date.now(),
+            status: "pending",
+            signals: md?.signals || { priceDistance: 0, momentum: 0, timeUrgency: 0, poolImbalance: 0 },
+          };
+
+          addAudit(agentId, "recommendation",
+            `[${sourceLabel}] ${dirLabel} on ${decision.symbol} (Market #${decision.marketId}) — ${actualStake} USDC @ ${decision.confidence}%`,
+            decision.reasoning + (decision.marketAnalysis ? `\n\nAnalysis: ${decision.marketAnalysis}` : ""),
+            {
+              confidence: decision.confidence,
+              stake: actualStake,
+              symbol: decision.symbol,
+              marketId: decision.marketId,
+              direction,
+              source: decision.source,
+              mode: profile.autoExecute ? "auto" : "manual",
+            }
+          );
+
+          // Auto-execute
+          if (profile.autoExecute) {
+            addLog(agentId, profile.name, `Auto-executing: ${dirLabel} on Market #${decision.marketId} (${decision.symbol}) for ${actualStake} USDC...`, "execution");
+            try {
+              const encryptedDir = await encryptDirection(direction);
+              const txHash = await autoExecutePosition(agentId, decision.marketId, encryptedDir, stakeRaw);
+              if (txHash) {
+                rec.txHash = txHash;
+                rec.status = "executed";
+                addLog(agentId, profile.name, `Executed: ${dirLabel} on ${decision.symbol} @ ${actualStake} USDC | tx: ${txHash.slice(0, 14)}...`, "execution");
+                addAudit(agentId, "executed", `${dirLabel} on ${decision.symbol} (Market #${decision.marketId}) — ${actualStake} USDC`, undefined, {
+                  txHash, symbol: decision.symbol, marketId: decision.marketId,
+                  direction, stake: actualStake, confidence: decision.confidence, source: decision.source, mode: "auto",
+                });
+              } else {
+                rec.status = "executed";
+                addLog(agentId, profile.name, `Auto-execute returned null for ${decision.symbol}. No delegate wallet.`, "error");
+              }
+            } catch (err) {
+              rec.status = "executed";
+              const errMsg = err instanceof Error ? err.message : String(err);
+              addLog(agentId, profile.name, `Auto-execute failed: ${errMsg}`, "error");
+              addAudit(agentId, "error", `Auto-execute failed on ${decision.symbol}: ${errMsg}`, undefined, {
+                symbol: decision.symbol, marketId: decision.marketId, direction, stake: actualStake, confidence: decision.confidence,
+              });
+            }
+          }
+
+          // Save decision to memory
+          await addAgentMemory(agentId, {
+            timestamp: Date.now(),
+            marketId: decision.marketId,
+            symbol: decision.symbol,
+            action: decision.action,
+            stake: actualStake,
+            confidence: decision.confidence,
+            reasoning: decision.reasoning,
+            source: decision.source,
+            currentPrice: md?.priceResult.price,
+            targetPrice: md ? Number(md.market.targetPrice) / 1e6 : undefined,
+            txHash: rec.txHash,
+          });
+
+          // Update recommendations state
+          setRecommendations((prev) => [rec, ...prev].slice(0, 100));
+        }
+
         // Update stats
-        setRecommendations((prev) => [...newRecs, ...prev].slice(0, 100));
+        const newSignals = decision.action !== "hold" ? 1 : 0;
+        const wasExecuted = decision.action !== "hold" && profile.autoExecute;
         setAgentLocalData((prev) => {
           const newMap = new Map(prev);
           const local = newMap.get(agentId) || {
             stats: { ...DEFAULT_AGENT_STATS },
             color: AGENT_COLORS[agentId % AGENT_COLORS.length],
           };
-          const avgConf =
-            newRecs.length > 0
-              ? newRecs.reduce((s, r) => s + r.confidence, 0) / newRecs.length
-              : 0;
-          const prevAvg = local.stats.avgConfidence;
           const prevCount = local.stats.totalRecommendations;
-          const newCount = prevCount + newRecs.length;
           local.stats = {
             ...local.stats,
             totalScans: local.stats.totalScans + 1,
-            totalRecommendations: newCount,
-            totalExecuted:
-              local.stats.totalExecuted +
-              newRecs.filter((r) => r.status === "executed").length,
-            avgConfidence:
-              newCount > 0
-                ? Math.round((prevAvg * prevCount + avgConf * newRecs.length) / newCount)
-                : 0,
+            totalRecommendations: prevCount + newSignals,
+            totalExecuted: local.stats.totalExecuted + (wasExecuted ? 1 : 0),
+            avgConfidence: newSignals > 0
+              ? Math.round((local.stats.avgConfidence * prevCount + decision!.confidence) / (prevCount + 1))
+              : local.stats.avgConfidence,
           };
           newMap.set(agentId, local);
           saveAgentLocalData(newMap);
           return newMap;
         });
 
-        addAudit(
-          agentId,
-          "scan",
-          `Scan complete: ${marketTotal} markets, ${prices.filter((p) => p.success).length} prices, ${newRecs.length} signals`
+        addAudit(agentId, "scan",
+          `Scan complete: ${marketTotal} markets, ${marketsData.length} eligible, decision: ${decision.action.toUpperCase()} [${sourceLabel}]`
         );
-        addLog(agentId, profile.name, `Scan complete. ${marketTotal} markets checked, ${newRecs.length} new signals.`, "scan");
+        addLog(agentId, profile.name,
+          `Scan complete. ${marketTotal} markets, ${marketsData.length} eligible. Decision: ${decision.action.toUpperCase()} [${sourceLabel}]`,
+          "scan"
+        );
       } catch (err) {
-        addLog(
-          agentId,
-          profile.name,
-          `Error: ${err instanceof Error ? err.message : "unknown"}`,
-          "error"
-        );
+        addLog(agentId, profile.name, `Error: ${err instanceof Error ? err.message : "unknown"}`, "error");
         addAudit(agentId, "error", `Scan failed: ${err instanceof Error ? err.message : "unknown"}`);
       }
     },
-    [addLog, addAudit, analyzeMarket]
+    [addLog, addAudit, analyzeMarket, callLLMDecision]
   );
 
   // ─── Start / Stop Agent ────────────────────────────────────────

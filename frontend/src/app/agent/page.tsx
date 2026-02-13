@@ -1472,6 +1472,13 @@ function AuditRow({ entry, agentName, agentColor }: { entry: AuditEntry; agentNa
         }}>
           {entry.action.replace("_", " ")}
         </span>
+        {entry.metadata?.source === "llm" && (
+          <span style={{
+            padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700,
+            background: "rgba(167, 111, 250, 0.1)", border: "1px solid rgba(167, 111, 250, 0.2)",
+            color: "#A76FFA", letterSpacing: "0.04em",
+          }}>LLM</span>
+        )}
         <span style={{ fontSize: 13, color: "var(--text-secondary)", flex: 1 }}>{entry.summary}</span>
         {(entry.details || entry.metadata) && (
           <span style={{ fontSize: 10, color: "var(--text-muted)", transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 200ms" }}>&#9656;</span>
@@ -1627,16 +1634,48 @@ function RecCard({
       style={{ padding: "16px 20px", borderLeft: "none", opacity: rec.status === "rejected" ? 0.5 : 1 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
             <span style={{
               padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
               background: "var(--bg)", border: "1px solid var(--border)",
               color: "var(--text-secondary)",
             }}>{isYes ? "YES" : "NO"}</span>
             <span className="text-body" style={{ fontWeight: 600 }}>Market #{rec.marketId}</span>
+            {/* LLM vs Rules badge */}
+            {rec.reasoning.includes("[LLM]") || rec.reasoning.includes("Market Analysis:") ? (
+              <span style={{
+                padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                background: "rgba(167, 111, 250, 0.1)", border: "1px solid rgba(167, 111, 250, 0.2)",
+                color: "#A76FFA", letterSpacing: "0.03em",
+              }}>LLM</span>
+            ) : (
+              <span style={{
+                padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)",
+                color: "var(--text-muted)", letterSpacing: "0.03em",
+              }}>Rules</span>
+            )}
             {rec.txHash && <span className="text-mono" style={{ fontSize: 10, color: "var(--text-muted)" }}>tx: {rec.txHash.slice(0, 10)}...</span>}
           </div>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 8 }}>{rec.reasoning}</p>
+          {/* Split reasoning from market analysis */}
+          {(() => {
+            const parts = rec.reasoning.split("\n\nMarket Analysis:");
+            return (
+              <>
+                <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: parts[1] ? 4 : 8 }}>{parts[0]}</p>
+                {parts[1] && (
+                  <p style={{
+                    fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, marginBottom: 8,
+                    padding: "6px 10px", borderRadius: 6,
+                    background: "rgba(167, 111, 250, 0.03)", border: "1px solid rgba(167, 111, 250, 0.06)",
+                    fontStyle: "italic",
+                  }}>
+                    {parts[1].trim()}
+                  </p>
+                )}
+              </>
+            );
+          })()}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {[
               { l: "Dist", v: `${rec.signals.priceDistance > 0 ? "+" : ""}${rec.signals.priceDistance}%` },
