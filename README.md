@@ -29,7 +29,7 @@ Explorer links:
 - Live charts use DIA price feeds (22 trusted sources)
 - Positions are submitted with BITE v2 encryption for direction (YES or NO)
 - Settlement is parimutuel (winners split the losing pool)
-- Resolution outcome is derived from oracle price vs target, with an override in UI
+- Resolution outcome is derived from oracle price vs target
 
 <img width="1856" height="990" alt="Market UI screenshot" src="https://github.com/user-attachments/assets/d2a85d5a-a195-4430-8610-b4a8d7599d72" />
 
