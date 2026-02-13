@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   useAccount,
   useReadContract,
@@ -37,14 +38,47 @@ import { encryptDirection } from "@/utils/encryption";
 // Main Page
 // ═══════════════════════════════════════════════════════════════════
 
-export default function AgentPage() {
+export default function AgentPageWrapper() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading agents...</div>}>
+      <AgentPage />
+    </Suspense>
+  );
+}
+
+function AgentPage() {
   const { address, isConnected } = useAccount();
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "compare" | "audit">("compare");
 
   const { engine } = useAgentContext();
+
+  // Auto-select agent & tab from query params (e.g. ?select=3&tab=signals)
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const selectId = searchParams.get("select");
+    const tab = searchParams.get("tab");
+    if (selectId) {
+      const id = Number(selectId);
+      if (!isNaN(id)) {
+        setSelectedAgentId(id);
+        setActiveTab("overview");
+        // The detail-level tab (signals/positions/etc) is handled via a ref below
+        if (tab) deepLinkDetailTabRef.current = tab;
+        deepLinkHandledRef.current = true;
+        // Clean up query params from URL without navigation
+        router.replace("/agent", { scroll: false });
+      }
+    }
+  }, [searchParams, router]);
+
+  // Ref to pass desired detail tab to AgentDetailView
+  const deepLinkDetailTabRef = useRef<string | null>(null);
 
   // Read on-chain data for each agent
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
@@ -169,6 +203,8 @@ export default function AgentPage() {
                 logs={engine.logs.filter((l) => l.agentId === selectedAgent.onChainId)}
                 audit={engine.globalAudit.filter((a) => a.agentId === selectedAgent.onChainId)}
                 onRefresh={() => queryClient.invalidateQueries()}
+                initialDetailTab={deepLinkDetailTabRef.current}
+                onDetailTabConsumed={() => { deepLinkDetailTabRef.current = null; }}
               />
             </motion.div>
           )}
@@ -249,17 +285,25 @@ function AgentInfoCard({
   const personality = agentData ? PERSONALITY_FROM_INDEX[(agentData as any).personality] || "balanced" : "balanced";
   const meta = PERSONALITY_META[personality];
 
-  // Load wallet info from encrypted IndexedDB
+  // Load wallet info from encrypted IndexedDB — auto-create if missing
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [addr, has] = await Promise.all([
-        getAgentWalletAddress(agentId),
-        hasAgentWallet(agentId),
-      ]);
+      const has = await hasAgentWallet(agentId);
+      if (!has) {
+        // Auto-create delegate wallet for agents that don't have one yet
+        console.log(`[AgentCard] Auto-creating delegate wallet for agent ${agentId}`);
+        const wallet = await createAgentWallet(agentId);
+        if (!cancelled) {
+          setDelegateAddr(wallet.address);
+          setWalletExists(true);
+        }
+        return;
+      }
+      const addr = await getAgentWalletAddress(agentId);
       if (!cancelled) {
         setDelegateAddr(addr);
-        setWalletExists(has);
+        setWalletExists(true);
       }
     })();
     return () => { cancelled = true; };
@@ -363,17 +407,14 @@ function AgentInfoCard({
               {name.charAt(0).toUpperCase()}
             </span>
           </div>
-          {isRunning && (
-            <motion.div
-              animate={{ opacity: [1, 0.4, 1] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              style={{
-                position: "absolute", bottom: -1, right: -1,
-                width: 10, height: 10, borderRadius: "50%",
-                background: "var(--text-secondary)", border: "2px solid var(--bg-raised)",
-              }}
-            />
-          )}
+          <div style={{
+            position: "absolute", bottom: -1, right: -1,
+            width: 10, height: 10, borderRadius: "50%",
+            background: isRunning ? "#22c55e" : "var(--text-muted)",
+            border: "2px solid var(--bg-raised)",
+            boxShadow: isRunning ? "0 0 6px rgba(34, 197, 94, 0.5)" : "none",
+            animation: isRunning ? "pulse-dot 2s ease-in-out infinite" : "none",
+          }} />
           {pendingCount > 0 && (
             <div style={{
               position: "absolute", top: -4, right: -6,
@@ -566,16 +607,15 @@ function CreateAgentModal({
   }, [isSuccess, existingCount, onCreated, queryClient]);
 
   async function handleDeploy() {
-    // Generate delegate keypair for auto-execute
     const isAuto = mode === "auto";
-    let delegateAddress: `0x${string}` = "0x0000000000000000000000000000000000000000";
-    let sfuelValue = BigInt(0);
 
-    if (isAuto) {
-      const wallet = await createAgentWallet(existingCount + 1);
-      delegateAddress = wallet.address;
-      sfuelValue = BigInt("10000000000000000"); // 0.01 sFUEL for delegate gas
-    }
+    // Always create a delegate wallet for every agent (needed for auto-execute,
+    // and useful to have ready if the user later switches to auto mode)
+    const wallet = await createAgentWallet(existingCount + 1);
+    const delegateAddress = wallet.address;
+
+    // Send a small amount of sFUEL to the delegate for gas
+    const sfuelValue = BigInt("10000000000000000"); // 0.01 sFUEL
 
     writeContract({
       address: BELIEF_MARKET_ADDRESS,
@@ -827,6 +867,8 @@ function AgentDetailView({
   logs,
   audit,
   onRefresh,
+  initialDetailTab,
+  onDetailTabConsumed,
 }: {
   agent: AgentProfile;
   isRunning: boolean;
@@ -838,8 +880,22 @@ function AgentDetailView({
   logs: AgentLog[];
   audit: AuditEntry[];
   onRefresh: () => void;
+  initialDetailTab?: string | null;
+  onDetailTabConsumed?: () => void;
 }) {
-  const [detailTab, setDetailTab] = useState<"signals" | "positions" | "audit" | "config" | "fund" | "logs">("signals");
+  const validTabs = ["signals", "positions", "audit", "config", "fund", "logs"] as const;
+  type DetailTab = typeof validTabs[number];
+  const startTab: DetailTab = (initialDetailTab && validTabs.includes(initialDetailTab as DetailTab))
+    ? (initialDetailTab as DetailTab)
+    : "signals";
+  const [detailTab, setDetailTab] = useState<DetailTab>(startTab);
+
+  // Consume the deep-link tab after mount so it doesn't re-apply
+  useEffect(() => {
+    if (initialDetailTab && onDetailTabConsumed) {
+      onDetailTabConsumed();
+    }
+  }, []);
   const meta = PERSONALITY_META[agent.personality];
   const pending = recommendations.filter((r) => r.status === "pending");
 
@@ -860,13 +916,14 @@ function AgentDetailView({
           }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#000", opacity: 0.7 }}>{agent.name.charAt(0).toUpperCase()}</span>
           </div>
-          {isRunning && (
-            <div style={{
-              position: "absolute", bottom: -1, right: -1,
-              width: 9, height: 9, borderRadius: "50%",
-              background: "var(--text-secondary)", border: "2px solid var(--bg-raised)",
-            }} />
-          )}
+          <div style={{
+            position: "absolute", bottom: -1, right: -1,
+            width: 10, height: 10, borderRadius: "50%",
+            background: isRunning ? "#22c55e" : "var(--text-muted)",
+            border: "2px solid var(--bg-raised)",
+            boxShadow: isRunning ? "0 0 6px rgba(34, 197, 94, 0.5)" : "none",
+            animation: isRunning ? "pulse-dot 2s ease-in-out infinite" : "none",
+          }} />
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1200,7 +1257,11 @@ function AgentGuardrailsPanel({
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   useEffect(() => {
-    if (isSuccess) onRefresh();
+    if (isSuccess) {
+      onRefresh();
+      // Full page reload so the engine picks up fresh on-chain guardrails
+      setTimeout(() => window.location.reload(), 1500);
+    }
   }, [isSuccess, onRefresh]);
 
   function handleUpdate() {
@@ -1707,13 +1768,15 @@ function RecCard({
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={handleApproveAndSign} disabled={busy} style={{
                 padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer",
-                background: busy ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                color: "var(--text-secondary)", border: "1px solid var(--border)",
+                background: busy ? "rgba(34,197,94,0.08)" : "rgba(34,197,94,0.12)",
+                color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)",
                 opacity: busy ? 0.7 : 1,
+                transition: "all 150ms",
               }}>{statusLabel || "Approve"}</button>
               <button onClick={() => onReject(rec.id)} disabled={busy} style={{
                 padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
-                background: "transparent", color: "var(--text-muted)", border: "1px solid var(--border)",
+                background: "rgba(239,68,68,0.12)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)",
+                transition: "all 150ms",
               }}>Reject</button>
             </div>
           )}

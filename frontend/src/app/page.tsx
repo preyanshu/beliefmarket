@@ -11,6 +11,7 @@ import { Market, MarketStatus, PERSONALITY_FROM_INDEX, PERSONALITY_META, AGENT_C
 import { getDataSourceById } from "@/config/dataSources";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { formatUnits } from "viem";
+import { useAgentContextSafe } from "@/providers/AgentProvider";
 
 type CategoryFilter = "all" | "commodity" | "etf" | "fx";
 type StatusFilter = "all" | "open" | "awaiting" | "resolved";
@@ -477,6 +478,8 @@ function AgentMiniCard({ agentId, index }: { agentId: number; index: number }) {
     args: [BigInt(agentId)],
   });
 
+  const agentCtx = useAgentContextSafe();
+  const isRunning = agentCtx?.engine.runningAgents.has(agentId) ?? false;
   const color = AGENT_COLORS[index % AGENT_COLORS.length];
 
   if (!agentData) {
@@ -528,13 +531,14 @@ function AgentMiniCard({ agentId, index }: { agentId: number; index: number }) {
               {name.charAt(0).toUpperCase()}
             </span>
           </div>
-          {isActive && (
-            <div style={{
-              position: "absolute", bottom: -1, right: -1,
-              width: 9, height: 9, borderRadius: "50%",
-              background: "var(--text-secondary)", border: "2px solid var(--bg-raised)",
-            }} />
-          )}
+          <div style={{
+            position: "absolute", bottom: -1, right: -1,
+            width: 10, height: 10, borderRadius: "50%",
+            background: isRunning ? "#22c55e" : "var(--text-muted)",
+            border: "2px solid var(--bg-raised)",
+            boxShadow: isRunning ? "0 0 6px rgba(34, 197, 94, 0.5)" : "none",
+            animation: isRunning ? "pulse-dot 2s ease-in-out infinite" : "none",
+          }} />
         </div>
 
         {/* Info */}

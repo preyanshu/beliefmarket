@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { useAccount } from "wagmi";
 import { useMultiAgent, type AgentLog } from "@/hooks/useAgentEngine";
 import type { AgentProfile, AgentRecommendation, AuditEntry } from "@/types/market";
@@ -117,15 +118,20 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     (r) => r.status === "pending"
   ).length;
 
+  const pathname = usePathname();
+  const isLanding = pathname === "/landing";
+
   return (
     <AgentContext.Provider
       value={{ engine, notifications, dismissNotification, dismissAll, pendingApprovalCount }}
     >
       {children}
-      <NotificationToast
-        notifications={notifications.filter((n) => !n.dismissed)}
-        onDismiss={dismissNotification}
-      />
+      {!isLanding && (
+        <NotificationToast
+          notifications={notifications.filter((n) => !n.dismissed)}
+          onDismiss={dismissNotification}
+        />
+      )}
     </AgentContext.Provider>
   );
 }
@@ -139,13 +145,13 @@ function NotificationToast({
   notifications: AgentNotification[];
   onDismiss: (id: string) => void;
 }) {
-  // Only show the latest 3 undismissed notifications
+  const router = useRouter();
   const visible = notifications.slice(0, 3);
 
-  // Auto-dismiss after 15 seconds
+  // Auto-dismiss after 12 seconds
   useEffect(() => {
     const timers = visible.map((n) =>
-      setTimeout(() => onDismiss(n.id), 15000)
+      setTimeout(() => onDismiss(n.id), 12000)
     );
     return () => timers.forEach(clearTimeout);
   }, [visible, onDismiss]);
@@ -156,145 +162,116 @@ function NotificationToast({
     <div
       style={{
         position: "fixed",
-        bottom: 20,
-        right: 20,
+        top: 68,
+        left: "50%",
+        transform: "translateX(-50%)",
         zIndex: 9999,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
-        maxWidth: 380,
+        alignItems: "center",
+        gap: 10,
+        width: 340,
       }}
     >
-      {visible.map((n, i) => (
-        <div
-          key={n.id}
-          style={{
-            background: "var(--bg-raised)",
-            border: `1px solid ${n.type === "approval_needed" ? "rgba(167, 111, 250, 0.3)" : "var(--border)"}`,
-            borderRadius: 10,
-            padding: "12px 16px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 10,
-            animation: "slideInRight 300ms ease-out",
-            opacity: 1 - i * 0.15,
-          }}
-        >
-          {/* Icon */}
+      {visible.map((n, i) => {
+        const isApproval = n.type === "approval_needed";
+        const isStopped = n.type === "stopped";
+
+        return (
           <div
+            key={n.id}
             style={{
-              width: 28,
-              height: 28,
-              borderRadius: "50%",
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background:
-                n.type === "approval_needed"
-                  ? "rgba(167, 111, 250, 0.12)"
-                  : n.type === "stopped"
-                  ? "rgba(239, 68, 68, 0.1)"
-                  : "rgba(255,255,255,0.04)",
-              fontSize: 13,
+              background: "rgba(18, 18, 24, 0.95)",
+              backdropFilter: "blur(16px)",
+              border: `1px solid ${isApproval ? "rgba(167, 111, 250, 0.25)" : isStopped ? "rgba(239, 68, 68, 0.2)" : "rgba(255,255,255,0.06)"}`,
+              borderRadius: 12,
+              padding: "14px 16px",
+              boxShadow: isApproval
+                ? "0 4px 24px rgba(167, 111, 250, 0.1), 0 12px 40px rgba(0,0,0,0.5)"
+                : "0 4px 24px rgba(0,0,0,0.5)",
+              animation: "slideInDown 280ms ease-out",
+              opacity: 1 - i * 0.1,
+              transform: `translateY(${i * 4}px)`,
+              transition: "opacity 200ms, transform 200ms",
             }}
           >
-            {n.type === "approval_needed" ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#A76FFA" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-                <path d="m9 12 2 2 4-4" />
-              </svg>
-            ) : n.type === "stopped" ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 8v4" />
-                <path d="M12 16h.01" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" />
-                <path d="m19 12-7 7-7-7" />
-              </svg>
-            )}
-          </div>
-
-          {/* Content */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-              {n.type === "approval_needed" && (
-                <span
-                  style={{
-                    padding: "1px 6px",
-                    borderRadius: 4,
-                    fontSize: 9,
-                    fontWeight: 700,
-                    background: "rgba(167, 111, 250, 0.15)",
-                    color: "#A76FFA",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.05em",
-                  }}
-                >
-                  Approve
+            {/* Top bar: type + agent + dismiss */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {isApproval ? (
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700,
+                    background: "rgba(167, 111, 250, 0.15)", color: "#A76FFA",
+                    textTransform: "uppercase", letterSpacing: "0.05em",
+                  }}>
+                    Action Required
+                  </span>
+                ) : isStopped ? (
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700,
+                    background: "rgba(239, 68, 68, 0.1)", color: "#ef4444",
+                    textTransform: "uppercase", letterSpacing: "0.05em",
+                  }}>
+                    Stopped
+                  </span>
+                ) : (
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700,
+                    background: "rgba(255,255,255,0.04)", color: "var(--text-muted)",
+                    textTransform: "uppercase", letterSpacing: "0.05em",
+                  }}>
+                    Info
+                  </span>
+                )}
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
+                  {n.agentName}
                 </span>
-              )}
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>
-                {n.agentName}
-              </span>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDismiss(n.id); }}
+                style={{
+                  background: "rgba(255,255,255,0.04)", border: "none", borderRadius: 6,
+                  color: "var(--text-muted)", cursor: "pointer", fontSize: 11,
+                  width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "background 150ms",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+              >
+                ✕
+              </button>
             </div>
-            <p
-              style={{
-                fontSize: 12,
-                color: "var(--text-secondary)",
-                lineHeight: 1.4,
-                margin: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical" as const,
-              }}
-            >
+
+            {/* Message */}
+            <p style={{
+              fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5,
+              margin: 0, marginBottom: isApproval ? 10 : 0,
+            }}>
               {n.message}
             </p>
-            {n.type === "approval_needed" && (
-              <a
-                href="/agent"
+
+            {/* Action row for approvals */}
+            {isApproval && (
+              <button
+                onClick={() => { router.push(`/agent?select=${n.agentId}&tab=signals`); onDismiss(n.id); }}
                 style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "#A76FFA",
-                  textDecoration: "none",
-                  marginTop: 4,
-                  display: "inline-block",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                  background: "#A76FFA", color: "#fff", border: "none", cursor: "pointer",
+                  transition: "opacity 150ms",
                 }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
               >
-                Go to Agents &rarr;
-              </a>
+                Review & Approve
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
+                </svg>
+              </button>
             )}
           </div>
-
-          {/* Dismiss */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss(n.id);
-            }}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 14,
-              padding: 2,
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -15,14 +15,18 @@ export interface AgentMemoryEntry {
   timestamp: number;
   marketId: number;
   symbol: string;
-  action: "buy_yes" | "buy_no" | "hold";
+  action: "buy_yes" | "buy_no" | "hold" | "rejected";
   stake: number;
   confidence: number;
   reasoning: string;
-  source: "llm" | "fallback";
+  source: "llm" | "fallback" | "user";
   currentPrice?: number;
   targetPrice?: number;
   txHash?: string;
+  /** Original action before user rejected it (only set when action === "rejected") */
+  originalAction?: "buy_yes" | "buy_no";
+  /** Why the user rejected — optional free-text (for future use) */
+  rejectionNote?: string;
 }
 
 function memoryKey(agentId: number): string {

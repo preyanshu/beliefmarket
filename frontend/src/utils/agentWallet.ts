@@ -151,6 +151,19 @@ export async function getAgentWalletAddress(agentId: number): Promise<string | n
   return stored?.address || null;
 }
 
+/**
+ * Ensure a delegate wallet exists for an agent — create one if missing.
+ * Returns the wallet address.
+ */
+export async function ensureAgentWallet(agentId: number): Promise<`0x${string}`> {
+  const existing = await getAgentWallet(agentId);
+  if (existing) return existing.address;
+
+  console.log(`[AgentWallet] No wallet found for agent ${agentId}, auto-creating...`);
+  const wallet = await createAgentWallet(agentId);
+  return wallet.address;
+}
+
 // ─── Auto-Execution ─────────────────────────────────────────────────
 
 /**
@@ -163,8 +176,14 @@ export async function autoExecutePosition(
   encryptedDirection: `0x${string}`,
   deposit: bigint
 ): Promise<`0x${string}` | null> {
-  const wallet = await getAgentWallet(agentId);
-  if (!wallet) return null;
+  let wallet = await getAgentWallet(agentId);
+  if (!wallet) {
+    // Auto-create wallet if missing
+    console.log(`[AgentWallet] Auto-creating wallet for agent ${agentId} during execution`);
+    const created = await createAgentWallet(agentId);
+    const account = privateKeyToAccount(created.privateKey);
+    wallet = { account, address: account.address };
+  }
 
   const walletClient = createWalletClient({
     account: wallet.account,

@@ -93,6 +93,7 @@ import { getItem, setItem } from "@/utils/encryptedStore";
 
 const AGENT_LOCAL_DATA_KEY = "beliefmarket_agent_local_data";
 const AUDIT_KEY = "beliefmarket_audit_trail";
+const RUNNING_AGENTS_KEY = "beliefmarket_running_agents";
 
 interface AgentLocalData {
   stats: AgentStats;
@@ -143,6 +144,25 @@ function saveAuditTrail(trail: AuditEntry[]) {
   // Fire-and-forget async persist
   setItem(AUDIT_KEY, trail.slice(0, 500)).catch((err) =>
     console.error("[AgentEngine] Failed to persist audit trail:", err)
+  );
+}
+
+// ─── Persisted running-agent state ──────────────────────────────────
+
+async function loadRunningAgentIds(): Promise<number[]> {
+  if (typeof window === "undefined") return [];
+  try {
+    const ids = await getItem<number[]>(RUNNING_AGENTS_KEY);
+    return ids ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRunningAgentIds(ids: number[]) {
+  if (typeof window === "undefined") return;
+  setItem(RUNNING_AGENTS_KEY, ids).catch((err) =>
+    console.error("[AgentEngine] Failed to persist running agents:", err)
   );
 }
 
@@ -399,12 +419,16 @@ export function useMultiAgent(address: string | undefined) {
 
         if (marketsContext.length === 0) return null;
 
+        // For manual agents, balance is irrelevant — user pays from their wallet.
+        // Send a high number so LLM doesn't hold due to "0 balance".
+        const effectiveBalance = profile.autoExecute ? balanceNum : 999999;
+
         const agentContext = {
           agentId,
           name: profile.name,
           personality: profile.personality,
           systemPrompt: profile.systemPrompt || "",
-          balance: balanceNum,
+          balance: effectiveBalance,
           maxBetPerMarket: Number(formatUnits(profile.maxBetPerMarket, USDC_DECIMALS)),
           maxTotalExposure: Number(formatUnits(profile.maxTotalExposure, USDC_DECIMALS)),
           currentExposure: Number(formatUnits(profile.currentExposure, USDC_DECIMALS)),
@@ -494,7 +518,8 @@ export function useMultiAgent(address: string | undefined) {
           return;
         }
 
-        addLog(agentId, profile.name, `Scanning markets [${personality}] | Vault: ${balanceNum} USDC...`, "scan");
+        const modeLabel = profile.autoExecute ? "Auto-Execute" : "Manual";
+        addLog(agentId, profile.name, `Scanning markets [${personality}] [${modeLabel}] | Vault: ${balanceNum} USDC...`, "scan");
 
         // 1. Read market count
         const count = await publicClient.readContract({
@@ -834,21 +859,27 @@ export function useMultiAgent(address: string | undefined) {
   // ─── Start / Stop Agent ────────────────────────────────────────
 
   const startAgent = useCallback(
-    (agentId: number, agentProfile: AgentProfile) => {
+    (agentId: number, agentProfile: AgentProfile, _silent = false) => {
       agentProfilesRef.current.set(agentId, agentProfile);
       setRunningAgents((prev) => {
         const newSet = new Set(prev);
         newSet.add(agentId);
+        // Persist running IDs to IndexedDB
+        saveRunningAgentIds(Array.from(newSet));
         return newSet;
       });
 
-      addAudit(agentId, "started", `Agent "${agentProfile.name}" started`);
-      addLog(
-        agentId,
-        agentProfile.name,
-        `Started [${agentProfile.personality}/${agentProfile.autoExecute ? "auto" : "manual"}]`,
-        "info"
-      );
+      if (!_silent) {
+        addAudit(agentId, "started", `Agent "${agentProfile.name}" started`);
+        addLog(
+          agentId,
+          agentProfile.name,
+          `Started [${agentProfile.personality}/${agentProfile.autoExecute ? "auto" : "manual"}]`,
+          "info"
+        );
+      } else {
+        addLog(agentId, agentProfile.name, "Auto-resumed from previous session", "info");
+      }
 
       scanForAgent(agentId);
       const interval = setInterval(() => scanForAgent(agentId), 30000); // 30s poll
@@ -867,6 +898,8 @@ export function useMultiAgent(address: string | undefined) {
       setRunningAgents((prev) => {
         const newSet = new Set(prev);
         newSet.delete(agentId);
+        // Persist running IDs to IndexedDB
+        saveRunningAgentIds(Array.from(newSet));
         return newSet;
       });
       const profile = agentProfilesRef.current.get(agentId);
@@ -937,6 +970,22 @@ export function useMultiAgent(address: string | undefined) {
         stake: rejStake,
         confidence: rec.confidence,
       });
+
+      // Store rejection in agent memory so the LLM knows about it on the next scan
+      const originalAction: "buy_yes" | "buy_no" = rec.direction ? "buy_yes" : "buy_no";
+      addAgentMemory(rec.agentId, {
+        timestamp: Date.now(),
+        marketId: rec.marketId,
+        symbol: rec.reasoning.match(/on (\w+)/)?.[1] || `Market #${rec.marketId}`,
+        action: "rejected",
+        originalAction,
+        stake: rejStake,
+        confidence: rec.confidence,
+        reasoning: `User rejected ${originalAction.toUpperCase()} recommendation: ${rec.reasoning.slice(0, 200)}`,
+        source: "user",
+        currentPrice: rec.currentPrice,
+        targetPrice: rec.targetPrice,
+      });
     }
   }, [recommendations, addAudit]);
 
@@ -962,6 +1011,81 @@ export function useMultiAgent(address: string | undefined) {
       addAudit(rec.agentId, "executed", `Position executed`);
     }
   }, [recommendations, addAudit]);
+
+  // ─── Auto-resume agents that were running before reload ─────────
+  const hasAutoResumedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasAutoResumedRef.current) return;        // only once
+    if (!agentIds.length) return;                 // wait for chain IDs
+
+    hasAutoResumedRef.current = true;
+    let cancelled = false;
+
+    (async () => {
+      const savedRunningIds = await loadRunningAgentIds();
+      if (cancelled || !savedRunningIds.length) return;
+
+      // Only resume agents that still exist on-chain
+      const toResume = savedRunningIds.filter((id) => agentIds.includes(id));
+      if (!toResume.length) {
+        // Clean up stale IDs
+        saveRunningAgentIds([]);
+        return;
+      }
+
+      console.log("[Agent Engine] Auto-resuming agents from previous session:", toResume);
+
+      for (const id of toResume) {
+        if (cancelled) break;
+        // Skip if already running (shouldn't happen but be safe)
+        if (intervalsRef.current.has(id)) continue;
+
+        try {
+          // Fetch fresh on-chain data for the agent
+          const agentData = await publicClient.readContract({
+            address: BELIEF_MARKET_ADDRESS,
+            abi: BELIEF_MARKET_ABI,
+            functionName: "getAgent",
+            args: [BigInt(id)],
+          }) as any;
+
+          if (!agentData || !agentData.isActive) {
+            console.log(`[Agent Engine] Skipping auto-resume for agent ${id} — inactive on chain`);
+            continue;
+          }
+
+          const profile: AgentProfile = {
+            onChainId: id,
+            owner: agentData.owner,
+            delegate: agentData.delegate,
+            name: agentData.name || `Agent ${id}`,
+            systemPrompt: agentData.systemPrompt || "",
+            personality: PERSONALITY_FROM_INDEX[agentData.personality] || "balanced",
+            color: AGENT_COLORS[id % AGENT_COLORS.length],
+            balance: agentData.balance,
+            maxBetPerMarket: agentData.maxBetPerMarket,
+            maxTotalExposure: agentData.maxTotalExposure,
+            currentExposure: agentData.currentExposure,
+            allowedAssetTypes: agentData.allowedAssetTypes,
+            confidenceThreshold: agentData.confidenceThreshold,
+            autoExecute: agentData.autoExecute,
+            isActive: agentData.isActive,
+            stats: DEFAULT_AGENT_STATS,
+            auditTrail: [],
+          };
+
+          // _silent = true  → skip "started" audit, show "auto-resumed" log instead
+          startAgent(id, profile, true);
+          console.log(`[Agent Engine] Auto-resumed agent "${profile.name}" (ID ${id})`);
+        } catch (err) {
+          console.error(`[Agent Engine] Failed to auto-resume agent ${id}:`, err);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [agentIds, startAgent]);
 
   // Cleanup on unmount
   useEffect(() => {

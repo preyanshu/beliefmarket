@@ -39,10 +39,12 @@ interface MemoryEntry {
   timestamp: number;
   marketId: number;
   symbol: string;
-  action: "buy_yes" | "buy_no" | "hold";
+  action: "buy_yes" | "buy_no" | "hold" | "rejected";
   stake: number;
   reasoning: string;
   confidence: number;
+  /** Only present when action === "rejected" — the original action before the user rejected */
+  originalAction?: "buy_yes" | "buy_no";
 }
 
 interface DecisionRequest {
@@ -152,11 +154,17 @@ Rules:
 1. You can ONLY pick ONE market per decision cycle. Choose the single best opportunity.
 2. You can: buy_yes (bet price will meet condition), buy_no (bet it won't), or hold (do nothing).
 3. You MUST respect your guardrails. Never exceed max bet or exposure limits.
-4. If your balance is 0 (auto-execute mode), you MUST hold.
-5. Consider your past actions — avoid over-concentrating on one market.
-6. Provide clear, detailed reasoning for your decision.
-7. Your confidence must genuinely reflect how sure you are (0-100).
-8. If no market presents a clear opportunity above your threshold, HOLD.
+4. If you are in Manual mode, balance does NOT matter — the user will pay from their own wallet. NEVER hold because of balance in manual mode.
+5. If you are in Auto-execute mode and balance is 0, you MUST hold.
+6. Consider your past actions — avoid over-concentrating on one market.
+7. Provide clear, detailed reasoning for your decision.
+8. Your confidence must genuinely reflect how sure you are (0-100).
+9. IMPORTANT: You should ALWAYS take a position (buy_yes or buy_no) on a market. Do NOT hold unless you are in auto-execute mode with 0 balance, or all markets already have your existing positions. Every market has an opportunity — analyze the data and commit to a direction. Being conservative means smaller stakes, NOT refusing to trade.
+10. REJECTED RECOMMENDATIONS: If the user previously rejected one of your recommendations, you will see it in the "USER-REJECTED RECOMMENDATIONS" section. You CAN still recommend the same market, but you MUST:
+    - Provide NEW and STRONGER reasoning that is clearly different from the rejected attempt.
+    - Consider whether a different direction (YES vs NO) or different stake size would be more appropriate.
+    - Explicitly acknowledge the prior rejection in your reasoning (e.g., "Previously my BUY_YES was rejected, but now I see...").
+    - If you have nothing new to say, pick a DIFFERENT market instead.
 
 Respond in JSON with exactly these fields:
 {
@@ -196,25 +204,44 @@ function buildUserPrompt(
     prompt += `  You have existing position: ${m.hasExistingPosition ? "YES — consider carefully before adding" : "NO"}\n\n`;
   }
 
-  // Memory
-  if (memory.length > 0) {
-    prompt += `=== YOUR PAST ACTIONS (last ${memory.length}) ===\n\n`;
-    for (const m of memory.slice(0, 15)) {
+  // Memory — split into rejections and other actions for clarity
+  const rejections = memory.filter((m) => m.action === "rejected");
+  const otherActions = memory.filter((m) => m.action !== "rejected");
+
+  if (rejections.length > 0) {
+    prompt += `=== USER-REJECTED RECOMMENDATIONS (${rejections.length}) ===\n`;
+    prompt += `The user REJECTED the following recommendations you made. If you want to recommend the same market again, you MUST provide NEW and STRONGER reasoning explaining why this time is different.\n\n`;
+    for (const m of rejections.slice(0, 10)) {
+      const date = new Date(m.timestamp).toLocaleString();
+      const origAction = m.originalAction ? m.originalAction.toUpperCase() : "UNKNOWN";
+      prompt += `  [${date}] Market #${m.marketId} (${m.symbol}): Your ${origAction} was REJECTED by user — ${m.stake} USDC @ ${m.confidence}% confidence\n`;
+      prompt += `    Context: ${m.reasoning}\n\n`;
+    }
+  }
+
+  if (otherActions.length > 0) {
+    prompt += `=== YOUR PAST ACTIONS (last ${otherActions.length}) ===\n\n`;
+    for (const m of otherActions.slice(0, 15)) {
       const date = new Date(m.timestamp).toLocaleString();
       prompt += `  [${date}] Market #${m.marketId} (${m.symbol}): ${m.action.toUpperCase()} — ${m.stake} USDC @ ${m.confidence}% confidence\n`;
       prompt += `    Reasoning: ${m.reasoning}\n\n`;
     }
-  } else {
+  } else if (rejections.length === 0) {
     prompt += `=== YOUR PAST ACTIONS ===\nNone yet. This is your first decision cycle.\n\n`;
   }
 
   // Remaining capacity
   const remainingExposure = agent.maxTotalExposure - agent.currentExposure;
   prompt += `=== YOUR STATUS ===\n`;
-  prompt += `Balance: ${agent.balance} USDC\n`;
+  if (agent.autoExecute) {
+    prompt += `Mode: Auto-execute (trades from vault)\n`;
+    prompt += `Vault Balance: ${agent.balance} USDC\n`;
+  } else {
+    prompt += `Mode: Manual (user pays from their own wallet — balance is NOT a constraint for you)\n`;
+  }
   prompt += `Remaining exposure capacity: ${remainingExposure} USDC\n`;
   prompt += `Max bet per market: ${agent.maxBetPerMarket} USDC\n\n`;
-  prompt += `Make your decision now. Remember: pick at most ONE market, or hold.`;
+  prompt += `Make your decision now. You MUST pick a market and take a position (buy_yes or buy_no). Do NOT hold.`;
 
   return prompt;
 }

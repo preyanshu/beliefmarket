@@ -322,16 +322,3 @@ React Frontend
 
 Track
 
-Encrypted Agents – SKALE Hackathon
-
-Final Judge Takeaway
-
-This project shows that price-less markets are not a UX gimmick, but a fundamentally new economic primitive — made possible only by encrypted conditional execution.
-
-If you want next, I can:
-
-Cut this down to a 1-page judge summary
-
-Write contract interfaces
-
-Help you prep a 30-second verbal pitch

@@ -438,6 +438,9 @@ export function Header() {
   const agentCtx = useAgentContextSafe();
   const pendingCount = agentCtx?.pendingApprovalCount || 0;
 
+  // Hide main header on the landing page (it has its own navbar)
+  if (pathname === "/landing") return null;
+
   return (
     <header
       style={{
@@ -461,7 +464,7 @@ export function Header() {
       >
         {/* Left: Logo + Nav */}
         <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
-          <Link href="/" style={{ textDecoration: "none" }}>
+          <Link href="/landing" style={{ textDecoration: "none" }}>
             <span
               style={{
                 fontSize: 18,
