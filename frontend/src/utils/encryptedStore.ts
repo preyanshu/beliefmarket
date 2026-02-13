@@ -11,7 +11,7 @@
 // ─── Constants ────────────────────────────────────────────────────────
 
 const DB_NAME = "beliefmarket_store";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Bumped to clear stale data from old contract deployment
 const STORE_NAME = "encrypted_data";
 
 // Fixed salt for PBKDF2 key derivation (not secret, just needs to be consistent)
@@ -114,9 +114,12 @@ function openDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "key" });
+      // On version upgrade, delete old store to clear stale data from previous contract
+      if (db.objectStoreNames.contains(STORE_NAME)) {
+        db.deleteObjectStore(STORE_NAME);
+        console.log("[EncryptedStore] Cleared old data on DB version upgrade");
       }
+      db.createObjectStore(STORE_NAME, { keyPath: "key" });
     };
 
     request.onsuccess = () => resolve(request.result);

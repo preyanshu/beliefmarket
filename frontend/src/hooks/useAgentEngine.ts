@@ -776,18 +776,13 @@ export function useMultiAgent(address: string | undefined) {
             try {
               const encryptedDir = await encryptDirection(direction);
               const txHash = await autoExecutePosition(agentId, decision.marketId, encryptedDir, stakeRaw);
-              if (txHash) {
-                rec.txHash = txHash;
-                rec.status = "executed";
-                addLog(agentId, profile.name, `Executed: ${dirLabel} on ${decision.symbol} @ ${actualStake} USDC | tx: ${txHash.slice(0, 14)}...`, "execution");
-                addAudit(agentId, "executed", `${dirLabel} on ${decision.symbol} (Market #${decision.marketId}) — ${actualStake} USDC`, undefined, {
-                  txHash, symbol: decision.symbol, marketId: decision.marketId,
-                  direction, stake: actualStake, confidence: decision.confidence, source: decision.source, mode: "auto",
-                });
-              } else {
-                rec.status = "executed";
-                addLog(agentId, profile.name, `Auto-execute returned null for ${decision.symbol}. No delegate wallet.`, "error");
-              }
+              rec.txHash = txHash;
+              rec.status = "executed";
+              addLog(agentId, profile.name, `Executed: ${dirLabel} on ${decision.symbol} @ ${actualStake} USDC | tx: ${txHash.slice(0, 14)}...`, "execution");
+              addAudit(agentId, "executed", `${dirLabel} on ${decision.symbol} (Market #${decision.marketId}) — ${actualStake} USDC`, undefined, {
+                txHash, symbol: decision.symbol, marketId: decision.marketId,
+                direction, stake: actualStake, confidence: decision.confidence, source: decision.source, mode: "auto",
+              });
             } catch (err) {
               rec.status = "executed";
               const errMsg = err instanceof Error ? err.message : String(err);

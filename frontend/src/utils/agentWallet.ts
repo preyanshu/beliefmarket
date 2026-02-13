@@ -175,7 +175,7 @@ export async function autoExecutePosition(
   marketId: number,
   encryptedDirection: `0x${string}`,
   deposit: bigint
-): Promise<`0x${string}` | null> {
+): Promise<`0x${string}`> {
   let wallet = await getAgentWallet(agentId);
   if (!wallet) {
     // Auto-create wallet if missing
@@ -208,7 +208,9 @@ export async function autoExecutePosition(
     const hash = await walletClient.writeContract(request);
     return hash;
   } catch (err) {
-    console.error(`[AgentWallet] Auto-execute failed for agent ${agentId}:`, err);
-    return null;
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[AgentWallet] Auto-execute failed for agent ${agentId}:`, errMsg);
+    // Throw so the caller can see the actual error instead of just getting null
+    throw new Error(`Auto-execute failed: ${errMsg.slice(0, 200)}`);
   }
 }
