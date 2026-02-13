@@ -21,18 +21,8 @@ Explorer links:
 - BeliefMarket: `https://bite-v2-sandbox.explorer.skale.network/address/0x15A4e6Be6840a0D54FB6a4A6F97E84F5D2a1453e`
 - USDC: `https://bite-v2-sandbox.explorer.skale.network/address/0xc4083B1E81ceb461Ccef3FDa8A9F24F0d764B6D8`
 
-## Hackathon submission checklist
 
-Required items and where they are shown:
-- Demo video showing encrypted intent, condition trigger, decryption, execution, receipt: see Demo video link above
-- Evidence of BITE v2 usage (logs, trace, screenshots) plus short explanation: see sections below and UI receipts
-- Clear description of:
-  - what stays encrypted: "What is private vs public"
-  - what condition unlocks execution: "Conditional trigger"
-  - how failure is handled: "Failure handling"
-  - receipt output showing what executed and why: "Receipts and audit output"
-
-## Features (to the point)
+## Features
 
 ### Private prediction markets
 - Markets are tied to real world oracle data (commodities, ETFs, FX rates)
