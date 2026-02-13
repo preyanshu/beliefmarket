@@ -94,7 +94,7 @@ export default function CreateMarketPage() {
   }
 
   if (isSuccess) {
-    setTimeout(() => router.push("/"), 1500);
+    setTimeout(() => router.push("/markets"), 1500);
   }
 
   const CATEGORIES: { key: CategoryFilter; label: string; count: number }[] = [

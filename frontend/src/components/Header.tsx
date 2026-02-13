@@ -11,7 +11,7 @@ import { ERC20_ABI } from "@/config/beliefMarketAbi";
 import { useAgentContextSafe } from "@/providers/AgentProvider";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Home" },
+  { href: "/markets", label: "Home" },
   { href: "/create", label: "Create" },
   { href: "/agent", label: "Agents" },
   { href: "/history", label: "History" },
@@ -439,7 +439,7 @@ export function Header() {
   const pendingCount = agentCtx?.pendingApprovalCount || 0;
 
   // Hide main header on the landing page (it has its own navbar)
-  if (pathname === "/landing") return null;
+  if (pathname === "/") return null;
 
   return (
     <header
@@ -464,7 +464,7 @@ export function Header() {
       >
         {/* Left: Logo + Nav */}
         <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
-          <Link href="/landing" style={{ textDecoration: "none" }}>
+          <Link href="/" style={{ textDecoration: "none" }}>
             <span
               style={{
                 fontSize: 18,

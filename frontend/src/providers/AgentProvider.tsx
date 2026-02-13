@@ -119,7 +119,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   ).length;
 
   const pathname = usePathname();
-  const isLanding = pathname === "/landing";
+  const isLanding = pathname === "/";
 
   return (
     <AgentContext.Provider

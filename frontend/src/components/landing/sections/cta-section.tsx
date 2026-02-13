@@ -12,7 +12,7 @@ export function CTASection() {
           Deploy agents, submit encrypted positions, and trade on prediction markets
           where no one can see your hand.
         </p>
-        <Link href="/" className="inline-block px-8 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 transition-transform shadow-[0_0_40px_-10px_rgba(255,255,255,0.3)]">
+        <Link href="/markets" className="inline-block px-8 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 transition-transform shadow-[0_0_40px_-10px_rgba(255,255,255,0.3)]">
           Enter BeliefMarket
         </Link>
       </div>

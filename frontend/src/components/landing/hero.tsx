@@ -66,7 +66,7 @@ export function Hero() {
           transition={{ duration: 0.8, delay: 0.6, ease: "easeOut" }}
           className="flex flex-col sm:flex-row items-center justify-center gap-4"
         >
-          <Link href="/" className="group relative px-6 py-3 bg-white text-black rounded-full font-semibold text-sm overflow-hidden transition-all hover:scale-105">
+          <Link href="/markets" className="group relative px-6 py-3 bg-white text-black rounded-full font-semibold text-sm overflow-hidden transition-all hover:scale-105">
             <span className="relative z-10 flex items-center gap-2">
               Launch App <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </span>

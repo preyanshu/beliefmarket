@@ -60,7 +60,7 @@ export function Navbar() {
             "glass bg-black/40 overflow-hidden"
           )}
         >
-          <Link href="/landing" className={cn("text-lg sm:text-xl font-bold tracking-tighter relative z-50 text-white flex-shrink-0", isMobileMenuOpen && "hidden md:block")}>
+          <Link href="/" className={cn("text-lg sm:text-xl font-bold tracking-tighter relative z-50 text-white flex-shrink-0", isMobileMenuOpen && "hidden md:block")}>
             BeliefMarket<span className="text-purple-500">.</span>
           </Link>
 
@@ -75,7 +75,7 @@ export function Navbar() {
                 {link.name}
               </Link>
             ))}
-            <Link href="/" className="bg-white text-black px-5 py-2 rounded-full text-sm font-semibold hover:bg-white/90 transition-colors">
+            <Link href="/markets" className="bg-white text-black px-5 py-2 rounded-full text-sm font-semibold hover:bg-white/90 transition-colors">
               Launch App
             </Link>
           </div>
@@ -137,7 +137,7 @@ export function Navbar() {
               
               <div className="flex flex-col gap-3 w-full max-w-[280px] mt-4">
                 <Link
-                  href="/"
+                  href="/markets"
                   onClick={() => setIsMobileMenuOpen(false)}
                   className="bg-white text-black px-6 py-3 rounded-full text-base font-semibold hover:bg-white/90 transition-colors w-full text-center"
                 >

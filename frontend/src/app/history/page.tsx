@@ -37,8 +37,9 @@ export default function HistoryPage() {
       won: prev.won + (s.isSettled && s.isWin ? 1 : 0),
       lost: prev.lost + (s.isSettled && !s.isWin ? 1 : 0),
       pending: prev.pending + (!s.isSettled ? 1 : 0),
-      totalStaked: prev.totalStaked + s.deposit,
-      totalPayout: prev.totalPayout + s.payout,
+      // Only count settled positions in P&L — pending positions haven't won or lost yet
+      totalStaked: prev.totalStaked + (s.isSettled ? s.deposit : 0),
+      totalPayout: prev.totalPayout + (s.isSettled ? s.payout : 0),
     }));
   }, []);
 
@@ -72,7 +73,7 @@ export default function HistoryPage() {
             borderRadius: "var(--radius-md)", padding: "56px 24px", textAlign: "center",
           }}>
             <p style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 12 }}>No positions yet.</p>
-            <Link href="/">
+            <Link href="/markets">
               <button style={{
                 padding: "8px 20px", borderRadius: 6, fontSize: 13, fontWeight: 600,
                 background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)",

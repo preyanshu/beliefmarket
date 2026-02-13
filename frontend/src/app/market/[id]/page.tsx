@@ -108,7 +108,7 @@ export default function MarketDetailPage({
       >
         {/* Back link */}
         <Link
-          href="/"
+          href="/markets"
           style={{
             display: "inline-flex",
             alignItems: "center",
