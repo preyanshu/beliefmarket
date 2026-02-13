@@ -261,7 +261,12 @@ export default function MarketDetailPage({
         {/* Resolve */}
         {canResolve && (
           <div style={{ marginTop: 32 }}>
-            <ResolveSection marketId={marketId} />
+            <ResolveSection
+              marketId={marketId}
+              livePrice={livePrice}
+              targetPrice={targetPrice}
+              conditionAbove={market.conditionAbove}
+            />
           </div>
         )}
       </motion.div>
@@ -304,9 +309,27 @@ function SettlementReceipt({ market }: { market: Market }) {
   );
 }
 
-function ResolveSection({ marketId }: { marketId: number }) {
+function ResolveSection({ marketId, livePrice, targetPrice, conditionAbove }: {
+  marketId: number;
+  livePrice: number | null;
+  targetPrice: number;
+  conditionAbove: boolean;
+}) {
   const queryClient = useQueryClient();
+
+  // Auto-determine outcome from oracle data
+  const oracleOutcome = livePrice !== null
+    ? (conditionAbove ? livePrice >= targetPrice : livePrice <= targetPrice)
+    : null;
+
   const [outcome, setOutcome] = useState<boolean>(true);
+
+  // Sync outcome with oracle data when available
+  useEffect(() => {
+    if (oracleOutcome !== null) {
+      setOutcome(oracleOutcome);
+    }
+  }, [oracleOutcome]);
 
   const { data: hash, writeContract, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
@@ -327,6 +350,9 @@ function ResolveSection({ marketId }: { marketId: number }) {
     });
   }
 
+  const conditionLabel = conditionAbove ? "above" : "below";
+  const conditionMet = oracleOutcome;
+
   return (
     <div style={{
       background: "var(--bg-raised)", border: "1px solid var(--border)",
@@ -338,8 +364,24 @@ function ResolveSection({ marketId }: { marketId: number }) {
         to decrypt all positions atomically and settle payouts.
       </p>
 
+      {/* Oracle verdict */}
+      {livePrice !== null && (
+        <div style={{
+          marginBottom: 16, padding: "10px 14px",
+          borderRadius: "var(--radius-sm)",
+          background: conditionMet ? "rgba(52, 211, 153, 0.08)" : "rgba(248, 113, 113, 0.08)",
+          border: `1px solid ${conditionMet ? "rgba(52, 211, 153, 0.2)" : "rgba(248, 113, 113, 0.2)"}`,
+        }}>
+          <span style={{ fontSize: 13, color: conditionMet ? "var(--yes)" : "var(--no)", fontWeight: 600 }}>
+            Oracle: Live price ${livePrice.toFixed(2)} is {conditionAbove ? (livePrice >= targetPrice ? "above" : "below") : (livePrice <= targetPrice ? "below" : "above")} target ${targetPrice.toFixed(2)}
+            {" — "}Condition {conditionMet ? "MET" : "NOT MET"}
+            {" → "}outcome auto-set to {conditionMet ? "YES" : "NO"}
+          </span>
+        </div>
+      )}
+
       <div style={{ marginBottom: 20 }}>
-        <span className="text-caption" style={{ display: "block", marginBottom: 8 }}>Oracle Outcome</span>
+        <span className="text-caption" style={{ display: "block", marginBottom: 8 }}>Oracle Outcome {oracleOutcome !== null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>(auto-detected, override if needed)</span>}</span>
         <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={() => setOutcome(true)}
