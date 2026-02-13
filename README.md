@@ -41,7 +41,7 @@ Explorer links:
 - Two modes:
   - Auto execute: delegate wallet signs and submits from the agent vault
   - Manual: user approves and signs from their wallet
-- LLM decisions via Groq (Llama 3.3 70B), with a rule based fallback
+- LLM decisions via Groq (Llama 3.3 70B)
 - Background scanning across pages, with in app notifications for approvals
 
 <img width="1856" height="990" alt="Agent UI screenshot" src="https://github.com/user-attachments/assets/3679eab8-bafd-499c-bef6-c23aa72a9f8c" />
@@ -51,7 +51,7 @@ Explorer links:
 - Private keys never touch our server
 - Local agent data is encrypted at rest (AES 256 GCM via Web Crypto)
 - Delegate address is registered on chain
-- Agent creation forwards 0.01 sFUEL for delegate gas in the same transaction
+
 
 ## Why private plus conditional
 
@@ -120,7 +120,7 @@ Frontend enforced:
 - Confidence threshold (LLM plus engine)
 - Allowed asset types (engine filters)
 - Human approval in manual mode
-- Skip if agent already has an open position in a market
+
 
 ## Failure handling
 
