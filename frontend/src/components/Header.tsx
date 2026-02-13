@@ -8,6 +8,7 @@ import { useAccount, useBalance, useReadContract } from "wagmi";
 import { formatUnits } from "viem";
 import { USDC_ADDRESS, USDC_DECIMALS } from "@/config/contracts";
 import { ERC20_ABI } from "@/config/beliefMarketAbi";
+import { useAgentContextSafe } from "@/providers/AgentProvider";
 
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
@@ -434,6 +435,8 @@ export function Header() {
   const { ready, authenticated, logout } = usePrivy();
   const { login } = useLogin();
   const { address } = useAccount();
+  const agentCtx = useAgentContextSafe();
+  const pendingCount = agentCtx?.pendingApprovalCount || 0;
 
   return (
     <header
@@ -500,7 +503,29 @@ export function Header() {
                     transition: "all 200ms",
                   }}
                 >
-                  {item.label}
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {item.label}
+                    {item.href === "/agent" && pendingCount > 0 && (
+                      <span
+                        style={{
+                          minWidth: 16,
+                          height: 16,
+                          borderRadius: 999,
+                          background: "#A76FFA",
+                          color: "#fff",
+                          fontSize: 10,
+                          fontWeight: 700,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: "0 4px",
+                          animation: "pulse-glow 2s ease-in-out infinite",
+                        }}
+                      >
+                        {pendingCount}
+                      </span>
+                    )}
+                  </span>
                 </Link>
               );
             })}

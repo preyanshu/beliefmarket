@@ -28,7 +28,8 @@ import {
   ASSET_ETF,
   ASSET_FX,
 } from "@/types/market";
-import { useMultiAgent, AgentLog } from "@/hooks/useAgentEngine";
+import { type AgentLog } from "@/hooks/useAgentEngine";
+import { useAgentContext } from "@/providers/AgentProvider";
 import { createAgentWallet, hasAgentWallet, deleteAgentWallet, getAgentWalletAddress, getAgentWalletPrivateKey } from "@/utils/agentWallet";
 import { encryptDirection } from "@/utils/encryption";
 
@@ -43,7 +44,7 @@ export default function AgentPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "compare" | "audit">("compare");
 
-  const engine = useMultiAgent(address);
+  const { engine } = useAgentContext();
 
   // Read on-chain data for each agent
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);

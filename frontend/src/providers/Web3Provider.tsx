@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { config } from "@/config/wagmi";
 import { skaleBiteV2Sandbox } from "@/config/chains";
 import { migrateFromLocalStorage } from "@/utils/encryptedStore";
+import { AgentProvider } from "@/providers/AgentProvider";
 
 const queryClient = new QueryClient();
 
@@ -72,7 +73,9 @@ export function Web3Provider({ children }: { children: React.ReactNode }) {
       }}
     >
       <QueryClientProvider client={queryClient}>
-        <WagmiProvider config={config}>{children}</WagmiProvider>
+        <WagmiProvider config={config}>
+          <AgentProvider>{children}</AgentProvider>
+        </WagmiProvider>
       </QueryClientProvider>
     </PrivyProvider>
   );
