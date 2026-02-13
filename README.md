@@ -10,7 +10,7 @@ BeliefMarket keeps market beliefs private until a condition is met. Users and ag
 
 | Item | Value |
 |------|-------|
-| Live demo | `https://beliefmarket.preyanshu.me` |
+| Live demo | `https://belief.preyanshu.me` |
 | Demo video (YouTube) | `https://youtu.be/` |
 | GitHub | `https://github.com/preyanshu/beliefmarket` |
 | Network | SKALE BITE V2 Sandbox (Chain ID `103698795`) |
